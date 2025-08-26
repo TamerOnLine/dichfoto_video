@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Optional, List
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# dichfoto_server/ (جذر المشروع)
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 class BaseConfig(BaseSettings):
@@ -35,6 +34,22 @@ class BaseConfig(BaseSettings):
     USE_GDRIVE: bool = False
     GDRIVE_ROOT_FOLDER_ID: Optional[str] = None
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None
+
+    # ===== Video Providers (NEW) =====
+    # Vimeo
+    VIMEO_ACCESS_TOKEN: Optional[str] = None
+
+    # Cloudflare Stream
+    CLOUDFLARE_ACCOUNT_ID: Optional[str] = None
+    CLOUDFLARE_API_TOKEN: Optional[str] = None
+    # (اختياري) مفتاح توقيع لروابط التشغيل الموقّعة
+    CLOUDFLARE_STREAM_SIGNING_KEY: Optional[str] = None
+
+    # YouTube (للجلب بالـ API فقط – غير مطلوب للـ embed)
+    YOUTUBE_API_KEY: Optional[str] = None
+
+    # قصر عرض المشغّل على نطاقات معيّنة (قوائم سماح)
+    VIDEO_DOMAIN_ALLOWLIST: List[str] = ["dichfoto.com", "upload.dichfoto.com", "www.dichfoto.com"]
 
     # Pydantic v2
     model_config = SettingsConfigDict(

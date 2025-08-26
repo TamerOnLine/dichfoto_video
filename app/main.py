@@ -12,6 +12,10 @@ import mimetypes
 from .config import settings
 from .database import engine, Base
 from .routers import admin, public, likes
+from fastapi.templating import Jinja2Templates
+from .templating import templates
+
+
 
 # Register additional MIME types
 mimetypes.add_type("image/avif", ".avif")
@@ -143,6 +147,20 @@ def health(request: Request):
 
 
 
+# app/main.py (بعد تهيئة Jinja/templates)
+def build_embed_url(provider: str, vid: str) -> str:
+    provider = (provider or "").lower()
+    if provider == "vimeo":
+        return f"https://player.vimeo.com/video/{vid}?dnt=1&title=0&byline=0&badge=0"
+    if provider == "youtube":
+        return f"https://www.youtube.com/embed/{vid}?rel=0"
+    if provider == "cloudflare":
+        # playback id أو uid مع /iframe
+        return f"https://iframe.videodelivery.net/{vid}"
+    # افتراضي: أعِدّ كما هو
+    return vid
+
+templates.env.globals["build_embed_url"] = build_embed_url
 
 
 

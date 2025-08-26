@@ -8,24 +8,23 @@
 <section class="container">
   <h2>Album: {{ album.title }}</h2>
 
-<!-- Upload -->
-<section class="section">
-  <h3>Upload Files</h3>
-  <form id="upload-form"
-        method="post"
-        action="{{ settings.UPLOAD_BASE_URL }}/admin/albums/{{ album.id }}/upload"
-        enctype="multipart/form-data"
-        class="form-box">
-    <div class="form-group">
-      <label for="files">Choose images</label>
-      <input id="files" type="file" name="files" multiple required accept="image/*" />
-    </div>
-    <div class="form-actions">
-      <button type="submit" class="btn">Upload</button>
-    </div>
-  </form>
-</section>
-
+  <!-- Upload -->
+  <section class="section">
+    <h3>Upload Files</h3>
+    <form id="upload-form"
+          method="post"
+          action="{{ settings.UPLOAD_BASE_URL }}/admin/albums/{{ album.id }}/upload"
+          enctype="multipart/form-data"
+          class="form-box">
+      <div class="form-group">
+        <label for="files">Choose images</label>
+        <input id="files" type="file" name="files" multiple required accept="image/*" />
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn">Upload</button>
+      </div>
+    </form>
+  </section>
 
   <!-- Assets -->
   <section class="section">
@@ -39,7 +38,7 @@
             <div class="thumb-wrap">
               <img src="/admin/thumb/{{ a.id }}" alt="{{ a.original_name }}" loading="lazy" decoding="async"
                    style="display:block;width:100%;height:auto;object-fit:contain;aspect-ratio:auto;background:#f3f4f6;">
- 
+
               {% if album.cover_asset_id == a.id %}
                 <span class="badge badge-cover" title="Cover">★ Cover</span>
               {% endif %}
@@ -65,6 +64,59 @@
           </figure>
         {% endfor %}
       </div>
+    {% endif %}
+  </section>
+
+  <!-- Videos -->
+  <section class="section">
+    <h3>Videos</h3>
+
+    <!-- Form: Add video -->
+    <form action="/admin/albums/{{ album.id }}/videos/add" method="post" class="form-box">
+      <div class="form-group">
+        <label>Provider</label>
+        <select name="provider" required>
+          <option value="vimeo">Vimeo</option>
+          <option value="youtube">YouTube</option>
+          <option value="cloudflare">Cloudflare</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Video ID / Playback ID</label>
+        <input type="text" name="video_id" placeholder="مثال: 123456789 أو xYzAbC..." required />
+      </div>
+      <div class="form-group">
+        <label>Title (اختياري)</label>
+        <input type="text" name="title" />
+      </div>
+      <div class="form-actions">
+        <button class="btn" type="submit">Add Video</button>
+      </div>
+    </form>
+
+    {% if videos and videos|length > 0 %}
+      <div class="asset-grid">
+        {% for v in videos %}
+          <figure class="card asset-card">
+            <div class="thumb-wrap" style="aspect-ratio:16/9">
+              <iframe src="{{ build_embed_url(v.provider, v.provider_video_id) }}"
+                      allowfullscreen loading="lazy"
+                      style="width:100%;height:100%;border:0"></iframe>
+            </div>
+            <figcaption class="caption">
+              {{ v.title or (v.provider ~ ':' ~ v.provider_video_id) }}
+            </figcaption>
+            <div class="asset-actions">
+              <form action="/admin/videos/{{ v.id }}/delete" method="post"
+                    onsubmit="return confirm('هل تريد حذف الفيديو؟');">
+                <button title="حذف">🗑</button>
+              </form>
+            </div>
+          </figure>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="muted">لا توجد فيديوهات بعد.</p>
     {% endif %}
   </section>
 

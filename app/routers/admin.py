@@ -5,7 +5,7 @@ from fastapi import (
 from fastapi.responses import (
     HTMLResponse, RedirectResponse, StreamingResponse, FileResponse
 )
-from fastapi.templating import Jinja2Templates
+from ..templating import templates
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime
@@ -26,8 +26,7 @@ from PIL import Image, ImageOps
 from app.utils import _parse_dt
 
 
-templates = Jinja2Templates(directory="templates")
-templates.env.globals["settings"] = settings
+
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -168,7 +167,6 @@ def create_album(
    
 
 
-
 @router.get("/albums/{album_id}", response_class=HTMLResponse)
 def view_album(request: Request, album_id: int, db: Session = Depends(get_db)):
     require_admin(request)
@@ -179,15 +177,22 @@ def view_album(request: Request, album_id: int, db: Session = Depends(get_db)):
     # ✅ الترتيب بالـ sort_order ثم id
     assets = sorted(album.assets, key=lambda a: ((a.sort_order or 0), a.id))
 
+    # ✅ الفيديوهات المرتبطة بالألبوم
+    videos = getattr(album, "videos", [])
+
     return templates.TemplateResponse(
         "admin_album_view.html",
         {
             "request": request,
             "site_title": settings.SITE_TITLE,
             "album": album,
-            "assets": assets,  # ← ORM objects
+            "assets": assets,   # ← الصور
+            "videos": videos,   # ← الفيديوهات
         },
     )
+
+
+
 
 
 @router.post("/albums/{album_id}/upload")
@@ -683,3 +688,33 @@ def admin_root_head():
 @router.head("/albums/{album_id}", include_in_schema=False)
 def view_album_head(album_id: int):
     return Response(status_code=200, headers={"Cache-Control": "no-store"})
+
+@router.post("/albums/{album_id}/videos/add")
+def add_video(request: Request, album_id: int,
+              provider: str = Form(...),
+              video_id: str = Form(...),
+              title: str | None = Form(None),
+              db: Session = Depends(get_db)):
+    require_admin(request)
+    album = db.get(models.Album, album_id)
+    if not album:
+        raise HTTPException(404)
+
+    v = models.Video(album_id=album_id,
+                     provider=provider.strip().lower(),
+                     provider_video_id=video_id.strip(),
+                     title=(title or "").strip() or None)
+    db.add(v)
+    db.commit()
+    return RedirectResponse(url=f"/admin/albums/{album_id}", status_code=303)
+
+
+@router.post("/videos/{video_id}/delete")
+def delete_video(request: Request, video_id: int, db: Session = Depends(get_db)):
+    require_admin(request)
+    v = db.get(models.Video, video_id)
+    if not v:
+        raise HTTPException(404)
+    album_id = v.album_id
+    db.delete(v); db.commit()
+    return RedirectResponse(url=f"/admin/albums/{album_id}", status_code=303)

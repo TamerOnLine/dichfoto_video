@@ -154,3 +154,25 @@ class Like(Base):
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+class Video(Base):
+    __tablename__ = "videos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    album_id = Column(Integer, ForeignKey("albums.id", ondelete="CASCADE"), index=True)
+
+    provider = Column(String(32), nullable=False)          # 'vimeo' | 'youtube' | 'cloudflare'
+    provider_video_id = Column(String(255), nullable=False) # Vimeo numeric id / YT id / CF playback id
+    title = Column(String(255), nullable=True)
+    duration_sec = Column(Integer, nullable=True)
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    is_hidden = Column(Boolean, default=False)
+
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    album = relationship("Album", back_populates="videos")
+
+
+videos = relationship("Video", back_populates="album", cascade="all, delete-orphan")
