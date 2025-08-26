@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ar" dir="ltr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>{% block title %}{{ site_title }}{% endblock %}</title>
+  <meta name="description" content="{% block meta_description %}معرض صور احترافي{% endblock %}" />
+
+  <link rel="icon" href="/static/favicon.ico" />
+  <link rel="stylesheet" href="/static/style.css?v=42" />
+
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+  <header class="{% block header_class %}{% endblock %}">
+    <div class="container">
+      <a class="brand" href="/"><strong>{{ site_title }}</strong></a>
+      <nav class="nav">
+        <a href="/">الرئيسية</a>
+        <a href="/admin">لوحة التحكم</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer>
+    <div class="container">
+      <small>© Dich Foto • Powered by MystroTamer</small>
+    </div>
+  </footer>
+
+  {% block scripts_extra %}{% endblock %}
+</body>
+</html>
