@@ -9,7 +9,7 @@ from .database import Base
 
 
 class Album(Base):
-    """Represents a photo album entity with associated metadata and assets."""
+    """Represents a photo album entity with associated metadata, assets, videos, and shares."""
 
     __tablename__ = "albums"
 
@@ -37,7 +37,7 @@ class Album(Base):
         post_update=True,  # Helps with circular reference during updates
     )
 
-    # Album-to-assets relationship: specify that the FK used is Asset.album_id
+    # Album-to-assets relationship
     assets = relationship(
         "Asset",
         back_populates="album",
@@ -47,6 +47,15 @@ class Album(Base):
         order_by="Asset.sort_order",  # Optional ordering
     )
 
+    # Album-to-videos relationship
+    videos = relationship(
+        "Video",
+        back_populates="album",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    # Album-to-shares relationship
     shares = relationship(
         "ShareLink",
         back_populates="album",
@@ -79,14 +88,11 @@ class Asset(Base):
     __tablename__ = "assets"
 
     id = Column(Integer, primary_key=True, index=True)
-
-    # Explicit FK to the album
     album_id = Column(Integer, ForeignKey("albums.id", ondelete="CASCADE"), index=True)
 
-    # Also declare the foreign_keys argument here
     album = relationship("Album", back_populates="assets", foreign_keys=[album_id])
 
-    sort_order = Column(Integer, nullable=True)  # Optional ordering
+    sort_order = Column(Integer, nullable=True)
 
     # File information
     filename = Column(String(255), nullable=False)
@@ -94,7 +100,7 @@ class Asset(Base):
     mime_type = Column(String(128), nullable=True)
     size = Column(Integer, nullable=True)
 
-    # Dimensions + LQIP (Low Quality Image Placeholder)
+    # Dimensions + LQIP
     width = Column(Integer, nullable=True)
     height = Column(Integer, nullable=True)
     lqip = Column(Text, nullable=True)
@@ -127,11 +133,7 @@ class Asset(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), index=True)
 
     def set_variants(self, variants: dict):
-        """Set variant URLs and dimensions based on the provided dictionary.
-
-        Args:
-            variants (dict): Dictionary containing width, height, and URLs for each format.
-        """
+        """Set variant URLs and dimensions based on the provided dictionary."""
         self.width = variants.get("width")
         self.height = variants.get("height")
         for ext in ("jpg", "webp", "avif"):
@@ -142,31 +144,18 @@ class Asset(Base):
             setattr(self, f"{ext}_1920", d.get(1920))
 
 
-class Like(Base):
-    """Represents a user's like on an image, optionally linked to a user ID."""
-
-    __tablename__ = "likes"
-
-    id = Column(Integer, primary_key=True, index=True)
-    url = Column(String, index=True)  # Image URL
-    user_id = Column(Integer, nullable=True)  # (Optional) if users exist
-    liked = Column(Boolean, default=True)
-
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-
 class Video(Base):
+    """Represents a video linked to an album."""
+
     __tablename__ = "videos"
 
     id = Column(Integer, primary_key=True, index=True)
     album_id = Column(Integer, ForeignKey("albums.id", ondelete="CASCADE"), index=True)
 
-    provider = Column(String(32), nullable=False)          # 'vimeo' | 'youtube' | 'cloudflare'
-    provider_video_id = Column(String(255), nullable=False) # Vimeo numeric id / YT id / CF playback id
-    title = Column(String(255), nullable=True)
-    duration_sec = Column(Integer, nullable=True)
-    width = Column(Integer, nullable=True)
-    height = Column(Integer, nullable=True)
+    provider = Column(String(50), nullable=False)      # youtube, vimeo, cloudflare
+    video_id = Column(String(255), nullable=False)     # ID from provider
+    title = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
     is_hidden = Column(Boolean, default=False)
 
     created_at = Column(DateTime, server_default=func.now())
@@ -175,4 +164,15 @@ class Video(Base):
     album = relationship("Album", back_populates="videos")
 
 
-videos = relationship("Video", back_populates="album", cascade="all, delete-orphan")
+class Like(Base):
+    """Represents a user's like on an image, optionally linked to a user ID."""
+
+    __tablename__ = "likes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    url = Column(String, index=True)  # Image URL
+    user_id = Column(Integer, nullable=True)  # Optional user link
+    liked = Column(Boolean, default=True)
+
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

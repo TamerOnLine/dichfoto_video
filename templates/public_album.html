@@ -20,6 +20,7 @@
   {# احرص على وجود القيم حتى لو لم يرسلها الراوتر (منع 500) #}
   {% set hero = hero|default(None) %}
   {% set gallery_assets = gallery_assets|default(assets|default([])) %}
+  {% set gallery_videos = gallery_videos|default([]) %}
 
   {# الغلاف (اختياري) #}
   {% if hero %}
@@ -28,6 +29,25 @@
 
   {# شبكة الصور — يعتمد على partial الذي يقرأ gallery_assets #}
   {% include 'partials/_gallery.html' %}
+
+  {# ====== شبكة الفيديوهات (سريعة – بلوك منفصل) ====== #}
+  {% if gallery_videos and gallery_videos|length > 0 %}
+    <section class="gallery-videos grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-8">
+      {% for v in gallery_videos %}
+        <div class="aspect-video w-full rounded-lg overflow-hidden bg-black">
+          <iframe
+            class="w-full h-full"
+            src="{{ build_embed_url(v.provider, v.video_id) }}"
+            title="{{ v.title or 'Video' }}"
+            loading="lazy"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            referrerpolicy="strict-origin-when-cross-origin"
+            allowfullscreen>
+          </iframe>
+        </div>
+      {% endfor %}
+    </section>
+  {% endif %}
 
   {# Lightbox: يظهر عند الضغط على صورة #}
   <div id="lb" class="lb" hidden aria-modal="true" role="dialog">

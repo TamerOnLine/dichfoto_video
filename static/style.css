@@ -1,10 +1,15 @@
 /* === Base === */
-:root{
+:root {
   --container: min(1300px, 100% - 24px);
-  --fg:#0f172a; --bg:#fff; --muted:#64748b; --border:#e2e8f0;
-  --radius:0px; --radius-img:0px;
-  --shadow-md:0 6px 16px rgba(15,23,42,.10);
+  --fg: #080808;         /* النص أبيض */
+  --bg: #f7f1f1;         /* خلفية سوداء */
+  --muted: #aaa;      /* رمادي فاتح للنصوص الثانوية */
+  --border: #333;     /* حدود رمادية غامقة */
+  --radius: 0px;
+  --radius-img: 0px;
+  --shadow-md: 0 6px 16px rgba(0,0,0,.6);
 }
+
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:400 16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,Arial}
 .container{width:var(--container);margin-inline:auto}
@@ -70,4 +75,5 @@ header.hide{ display: none !important; }
 
 /* إزالة أي مسافة علوية للكونتنت عندما نخفي الهيدر */
 main.container{ padding-top: 0 !important; }
+
 

@@ -1,11 +1,10 @@
 from fastapi import (
-    APIRouter, Depends, Header, Request, UploadFile, File, Form,
+    APIRouter, Depends, Request, UploadFile, File, Form,
     HTTPException, Response
 )
 from fastapi.responses import (
     HTMLResponse, RedirectResponse, StreamingResponse, FileResponse
 )
-from ..templating import templates
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime
@@ -14,18 +13,43 @@ from pathlib import Path
 import json, shutil
 from pydantic import BaseModel
 
+from ..templating import templates
 from ..database import SessionLocal
 from .. import models
 from ..config import settings
-from ..utils import gen_slug, hash_password
+from ..utils import gen_slug, hash_password, safe_filename
 from ..services import thumbs, gdrive
 from ..services.variants import make_variants
-from ..utils import safe_filename
 from PIL import Image, ImageOps
-
 from app.utils import _parse_dt
 
+# helpers لاستخراج الـID من روابط يوتيوب/فيميو/كلودفلير
+import re
+from urllib.parse import urlparse, parse_qs
 
+def _extract_video_id(provider: str, raw: str) -> str:
+    raw = (raw or "").strip()
+    p = (provider or "").lower()
+
+    if p == "youtube":
+        # https://youtu.be/ID  |  https://www.youtube.com/watch?v=ID
+        if "youtu.be/" in raw:
+            return raw.rsplit("/", 1)[-1].split("?")[0]
+        if "watch" in raw:
+            return parse_qs(urlparse(raw).query).get("v", [""])[0]
+        return raw  # قد يكون ID مباشرة
+
+    if p == "vimeo":
+        # https://vimeo.com/123456789
+        m = re.search(r"vimeo\.com/(\d+)", raw)
+        return m.group(1) if m else raw
+
+    if p == "cloudflare":
+        # https://iframe.videodelivery.net/PLAYBACK_ID
+        m = re.search(r"videodelivery\.net/([A-Za-z0-9_-]+)", raw)
+        return m.group(1) if m else raw
+
+    return raw
 
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -35,10 +59,10 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 # ===========================
 THEME_PATH = Path("static/theme.json")
 
-
 class ThemePayload(BaseModel):
     vars: dict[str, str] = {}
     disableDark: bool = False
+
 
 def _variant_paths(album_id: int, stem: str) -> list[Path]:
     base = Path(settings.STORAGE_DIR)
@@ -53,7 +77,41 @@ def _variant_paths(album_id: int, stem: str) -> list[Path]:
     return [base / r for r in rels]
 
 
+# ================
+# Helpers
+# ================
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
+def is_admin(request: Request) -> bool:
+    return bool(request.session.get("admin"))
+
+def require_admin(request: Request):
+    if not is_admin(request):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+
+# ================
+# Routes
+# ================
+@router.get("", include_in_schema=False)
+def admin_no_slash():
+    return RedirectResponse(url="/admin/", status_code=301)
+
+@router.get("/", response_class=HTMLResponse)
+def admin_home(request: Request):
+    if not is_admin(request):
+        return templates.TemplateResponse(
+            "admin_login.html",
+            {"request": request, "site_title": settings.SITE_TITLE},
+        )
+    return RedirectResponse(url="/admin/albums", status_code=302)
+
+# ---- Theme pages ----
 @router.get("/theme", response_class=HTMLResponse)
 @router.get("/theme/", response_class=HTMLResponse, include_in_schema=False)
 def theme_page(request: Request):
@@ -69,7 +127,6 @@ def theme_save(payload: ThemePayload, request: Request):
     )
     return {"ok": True}
 
-
 @router.post("/theme/reset")
 def theme_reset(request: Request):
     require_admin(request)
@@ -77,63 +134,15 @@ def theme_reset(request: Request):
         THEME_PATH.unlink()
     return {"ok": True}
 
-
 @router.get("/theme/config")
 def theme_config():
-    """
-    يعيد theme.json إن وُجد، وإلا يعيد إعدادات افتراضية.
-    لا يتطلب صلاحية admin لأن كل الصفحات تحتاج قراءته.
-    """
     if THEME_PATH.exists():
         data = json.loads(THEME_PATH.read_text(encoding="utf-8"))
     else:
-        data = {
-            "vars": {},          # استخدم قيم :root الافتراضية من style.css
-            "disableDark": False # مثال لفلاغ إضافي
-        }
+        data = {"vars": {}, "disableDark": False}
     return data
 
-
-# ================
-# Helpers
-# ================
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-def is_admin(request: Request) -> bool:
-    return bool(request.session.get("admin"))
-
-
-def require_admin(request: Request):
-    if not is_admin(request):
-        raise HTTPException(status_code=403, detail="Not authorized")
-
-
-# ================
-# Routes
-# ================
-@router.get("", include_in_schema=False)
-def admin_no_slash():
-    """Redirect /admin → /admin/ (301 Moved Permanently)."""
-    return RedirectResponse(url="/admin/", status_code=301)
-
-
-@router.get("/", response_class=HTMLResponse)
-def admin_home(request: Request):
-    if not is_admin(request):
-        return templates.TemplateResponse(
-            "admin_login.html",
-            {"request": request, "site_title": settings.SITE_TITLE},
-        )
-    return RedirectResponse(url="/admin/albums", status_code=302)
-
-
-
+# ---- Albums: create/view/list ----
 @router.get("/albums/new", response_class=HTMLResponse)
 def album_new_form(request: Request):
     require_admin(request)
@@ -142,13 +151,12 @@ def album_new_form(request: Request):
         {"request": request, "site_title": settings.SITE_TITLE},
     )
 
-
 @router.post("/albums/new")
 def create_album(
     request: Request,
     title: str = Form(...),
     photographer: Optional[str] = Form(None),
-    photographer_url: Optional[str] = Form(None),  # جديد
+    photographer_url: Optional[str] = Form(None),
     event_date: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
@@ -156,7 +164,7 @@ def create_album(
     album = models.Album(
         title=title.strip(),
         photographer=photographer or None,
-        photographer_url=photographer_url or None,  # جديد
+        photographer_url=photographer_url or None,
         event_date=_parse_dt(event_date),
     )
     db.add(album)
@@ -164,8 +172,6 @@ def create_album(
     db.refresh(album)
     dest = request.url_for("view_album", album_id=album.id)
     return RedirectResponse(url=dest, status_code=302)
-   
-
 
 @router.get("/albums/{album_id}", response_class=HTMLResponse)
 def view_album(request: Request, album_id: int, db: Session = Depends(get_db)):
@@ -173,28 +179,30 @@ def view_album(request: Request, album_id: int, db: Session = Depends(get_db)):
     album = db.get(models.Album, album_id)
     if not album:
         raise HTTPException(404)
-
-    # ✅ الترتيب بالـ sort_order ثم id
     assets = sorted(album.assets, key=lambda a: ((a.sort_order or 0), a.id))
-
-    # ✅ الفيديوهات المرتبطة بالألبوم
     videos = getattr(album, "videos", [])
-
     return templates.TemplateResponse(
         "admin_album_view.html",
         {
             "request": request,
             "site_title": settings.SITE_TITLE,
             "album": album,
-            "assets": assets,   # ← الصور
-            "videos": videos,   # ← الفيديوهات
+            "assets": assets,
+            "videos": videos,
         },
     )
 
+@router.get("/albums", response_class=HTMLResponse)
+@router.get("/albums/", response_class=HTMLResponse, include_in_schema=False)
+def list_albums(request: Request, db: Session = Depends(get_db)):
+    require_admin(request)
+    albums = db.query(models.Album).order_by(models.Album.created_at.desc()).all()
+    return templates.TemplateResponse(
+        "admin_album_list.html",
+        {"request": request, "albums": albums, "site_title": settings.SITE_TITLE},
+    )
 
-
-
-
+# ---- Upload assets ----
 @router.post("/albums/{album_id}/upload")
 async def upload_files(
     request: Request,
@@ -213,20 +221,18 @@ async def upload_files(
     orig_dir = album_root / "original"
     orig_dir.mkdir(parents=True, exist_ok=True)
 
-    # ===== Drive setup (اختياري) =====
+    # (اختياري) Google Drive
     service = None
     d_album = d_orig = d_thumb400 = d_disp1600 = d_big2048 = None
     if getattr(settings, "USE_GDRIVE", False):
         try:
             service = gdrive._service()
             root_id = settings.GDRIVE_ROOT_FOLDER_ID
-            if not root_id:
-                print("[gdrive] WARNING: GDRIVE_ROOT_FOLDER_ID not set")
-            else:
+            if root_id:
                 d_albums   = gdrive.ensure_subfolder(service, root_id, "albums")
                 d_album    = gdrive.ensure_subfolder(service, d_albums, str(album.id))
                 d_orig     = gdrive.ensure_subfolder(service, d_album, "original")
-                d_thumb    = gdrive.ensure_subfolder(service, d_album, "thumb")   # متغير داخلي فقط
+                d_thumb    = gdrive.ensure_subfolder(service, d_album, "thumb")
                 d_thumb400 = gdrive.ensure_subfolder(service, d_thumb, "400")
                 d_disp     = gdrive.ensure_subfolder(service, d_album, "disp")
                 d_disp1600 = gdrive.ensure_subfolder(service, d_disp, "1600")
@@ -235,33 +241,26 @@ async def upload_files(
         except Exception as e:
             print("[gdrive] init failed:", e)
             service = None
-    # ===== end Drive setup =====
 
     saved_assets = []
-
     max_order = max([a.sort_order or 0 for a in album.assets], default=0)
 
     for file in files:
-        # (1) قيد النوع — صور فقط
         if not (file.content_type or "").startswith("image/"):
             raise HTTPException(status_code=400, detail="Only image files are allowed")
 
-        # اسم آمن
         filename = safe_filename(file.filename)
         original_path = orig_dir / filename
 
-        # (2) منع التصادم بالأسماء (إن وجد نفس الاسم)
         if original_path.exists():
             ts = int(datetime.now().timestamp())
             original_path = original_path.with_name(f"{original_path.stem}-{ts}{original_path.suffix}")
-            filename = original_path.name  # مهم: حدِّث الاسم
+            filename = original_path.name
 
-        # نسخ ستريمي بدون تحميل كامل الذاكرة
         with open(original_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
         await file.close()
 
-        # توليد المشتقات (jpg+webp)
         stem = Path(filename).stem
         variants = make_variants(
             original_path=original_path,
@@ -270,18 +269,14 @@ async def upload_files(
             filename_stem=stem,
         )
 
-        # (اختياري) LQIP
         try:
             lqip = thumbs.tiny_placeholder_base64(original_path)
         except Exception:
             lqip = None
 
-        # رفع إلى Google Drive إن كان مفعّلًا
-        gfile_id = None
-        gthumb_id = None
+        gfile_id = gthumb_id = None
         if service and d_album:
             try:
-                # الأصل
                 with open(original_path, "rb") as fp:
                     gfile_id = gdrive.upload_bytes(
                         service, d_orig, filename,
@@ -289,7 +284,6 @@ async def upload_files(
                         fp.read(),
                     )
 
-                # util لرفع ملف مشتق
                 def _up(rel: str, folder_id: str):
                     p = STORAGE_ROOT / rel
                     if p.exists():
@@ -298,41 +292,31 @@ async def upload_files(
                             return gdrive.upload_bytes(service, folder_id, p.name, mime, fp.read())
                     return None
 
-                # thumb/400
                 tid_jpg  = _up(variants["thumb_jpg"], d_thumb400)
                 _up(variants["thumb_webp"], d_thumb400)
                 if tid_jpg:
                     gthumb_id = tid_jpg
-
-                # disp/1600
                 _up(variants["disp_jpg"], d_disp1600)
                 _up(variants["disp_webp"], d_disp1600)
-
-                # big/2048
                 _up(variants["big_jpg"], d_big2048)
                 _up(variants["big_webp"], d_big2048)
-
             except Exception as e:
                 print("[gdrive] upload failed:", e)
 
-        # (3) خزِّن المسار النسبي بصيغة URL (forward slashes) — مهم لو ويندوز
         filename_rel = (Path("albums") / str(album.id) / "original" / filename).as_posix()
-
         asset = models.Asset(
             album_id=album.id,
-            filename=filename_rel,  # ← هنا الفرق
+            filename=filename_rel,
             original_name=file.filename,
             mime_type=file.content_type,
             size=original_path.stat().st_size,
             gdrive_file_id=gfile_id,
             gdrive_thumb_id=gthumb_id,
         )
-
         asset.sort_order = max_order + 10
         max_order += 10
-        # إن كان لديك حقل JSON للمشتقات
         try:
-            asset.set_variants(variants)  # يحتفظ بالمسارات المحلية
+            asset.set_variants(variants)
         except Exception:
             pass
         asset.lqip = lqip
@@ -345,19 +329,15 @@ async def upload_files(
     accept = (request.headers.get("accept") or "").lower()
     if "text/html" in accept:
         return RedirectResponse(url=f"/admin/albums/{album_id}", status_code=303)
-
     return {"ok": True, "uploaded": [a.id for a in saved_assets]}
 
-
-
-
+# ---- Thumbs ----
 @router.get("/thumb/{asset_id}")
 def admin_thumb(asset_id: int, db: Session = Depends(get_db)):
     asset = db.get(models.Asset, asset_id)
     if not asset:
         raise HTTPException(404)
 
-    # لو فيه ثمنبيل من Drive
     if getattr(settings, "USE_GDRIVE", False) and getattr(asset, "gdrive_thumb_id", None):
         try:
             gen = gdrive.stream_via_requests(asset.gdrive_thumb_id, chunk_size=256 * 1024)
@@ -365,7 +345,6 @@ def admin_thumb(asset_id: int, db: Session = Depends(get_db)):
         except Exception:
             pass
 
-    # محلي: اعرض من المشتقات الجاهزة
     stem = Path(str(asset.filename).replace("\\", "/")).stem
     thumb_dir = Path(settings.STORAGE_DIR) / "albums" / str(asset.album_id) / "thumb" / "400"
     jpg = thumb_dir / f"{stem}.jpg"
@@ -376,18 +355,14 @@ def admin_thumb(asset_id: int, db: Session = Depends(get_db)):
     if webp.exists():
         return FileResponse(webp, media_type="image/webp")
 
-    # Fallback SVG
-    svg = (
-        '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="260">'
-        '<rect width="100%" height="100%" fill="#e2e8f0"/>'
-        '<text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" '
-        'font-family="Segoe UI, Roboto, sans-serif" font-size="16" fill="#64748b">No preview</text>'
-        '</svg>'
-    )
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="260">'
+           '<rect width="100%" height="100%" fill="#e2e8f0"/>'
+           '<text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" '
+           'font-family="Segoe UI, Roboto, sans-serif" font-size="16" fill="#64748b">No preview</text>'
+           '</svg>')
     return Response(content=svg, media_type="image/svg+xml")
 
-
-
+# ---- Auth ----
 @router.get("/login", response_class=HTMLResponse)
 def admin_login_form(request: Request):
     if is_admin(request):
@@ -397,7 +372,6 @@ def admin_login_form(request: Request):
         {"request": request, "site_title": settings.SITE_TITLE},
     )
 
-
 @router.post("/login")
 def admin_login(request: Request, password: str = Form(...)):
     if password == settings.ADMIN_PASSWORD:
@@ -405,7 +379,7 @@ def admin_login(request: Request, password: str = Form(...)):
         return RedirectResponse(url="/admin/albums/new", status_code=302)
     return RedirectResponse(url="/admin", status_code=302)
 
-
+# ---- Share Links ----
 @router.api_route("/albums/{album_id}/share", methods=["POST"])
 def create_share(
     request: Request,
@@ -442,17 +416,16 @@ def create_share(
     db.refresh(sl)
     return RedirectResponse(url=f"/s/{sl.slug}", status_code=302)
 
-
 @router.get("/albums/{album_id}/share", include_in_schema=False)
 def create_share_get(album_id: int):
     return RedirectResponse(url=f"/admin/albums/{album_id}", status_code=302)
 
-
+# ---- Asset ops ----
 @router.post("/assets/{asset_id}/move")
 def move_asset(
     request: Request,
     asset_id: int,
-    direction: str = Form(...),  # values: up / down / top / bottom
+    direction: str = Form(...),  # up/down/top/bottom
     db: Session = Depends(get_db),
 ):
     require_admin(request)
@@ -480,13 +453,11 @@ def move_asset(
     if new_idx != idx:
         item = assets.pop(idx)
         assets.insert(new_idx, item)
-        # أعد الترقيم بخطوة 10
         for i, it in enumerate(assets):
             it.sort_order = i * 10
         db.commit()
 
     return RedirectResponse(url=f"/admin/albums/{album.id}", status_code=303)
-
 
 @router.post("/assets/{asset_id}/rotate")
 def rotate_asset(
@@ -506,7 +477,6 @@ def rotate_asset(
     if not orig.exists():
         raise HTTPException(404, "Original file not found")
 
-    # امسح المشتقات القديمة
     stem = f_rel.stem
     for p in _variant_paths(asset.album_id, stem):
         try:
@@ -515,7 +485,6 @@ def rotate_asset(
         except Exception:
             pass
 
-    # دوّر الأصل
     with Image.open(orig) as im:
         im = ImageOps.exif_transpose(im)
         angle = -90 if dir == "cw" else 90
@@ -533,7 +502,6 @@ def rotate_asset(
             asset.filename = new_rel
             orig = base / new_rel
 
-    # توليد المشتقات وتحديث الحقول
     variants = make_variants(
         original_path=orig,
         out_root=base,
@@ -552,7 +520,6 @@ def rotate_asset(
     db.commit()
     return RedirectResponse(url=f"/admin/albums/{asset.album_id}", status_code=303)
 
-
 @router.post("/assets/{asset_id}/delete")
 def delete_asset(request: Request, asset_id: int, db: Session = Depends(get_db)):
     require_admin(request)
@@ -566,7 +533,6 @@ def delete_asset(request: Request, asset_id: int, db: Session = Depends(get_db))
     orig = base / f_rel
     stem = f_rel.stem
 
-    # امسح المشتقات
     for p in _variant_paths(album.id, stem):
         try:
             if p.exists():
@@ -574,18 +540,15 @@ def delete_asset(request: Request, asset_id: int, db: Session = Depends(get_db))
         except Exception:
             pass
 
-    # امسح الأصل
     try:
         if orig.exists():
             orig.unlink()
     except Exception:
         pass
 
-    # لو هي صورة الغلاف
     if getattr(album, "cover_asset_id", None) == asset.id:
         album.cover_asset_id = None
 
-    # اختياري: احذف من Drive
     if getattr(settings, "USE_GDRIVE", False):
         try:
             if getattr(asset, "gdrive_file_id", None):
@@ -598,7 +561,6 @@ def delete_asset(request: Request, asset_id: int, db: Session = Depends(get_db))
     db.delete(asset)
     db.commit()
     return RedirectResponse(url=f"/admin/albums/{album.id}", status_code=303)
-
 
 @router.post("/albums/{album_id}/cover/{asset_id}")
 def set_cover(request: Request, album_id: int, asset_id: int, db: Session = Depends(get_db)):
@@ -621,64 +583,69 @@ def clear_cover(request: Request, album_id: int, db: Session = Depends(get_db)):
     db.commit()
     return RedirectResponse(url=f"/admin/albums/{album_id}", status_code=303)
 
-
-
-
-
-
-@router.get("/albums/{album_id}/edit", response_class=HTMLResponse)
-def edit_album_page(request: Request, album_id: int, db: Session = Depends(get_db)):
+# ---- Videos ----
+@router.post("/albums/{album_id}/videos/add")
+def add_video(request: Request, album_id: int,
+              provider: str = Form(...),
+              video_id: str = Form(...),      # يقبل ID أو رابط كامل
+              title: str | None = Form(None),
+              db: Session = Depends(get_db)):
     require_admin(request)
-    album = db.get(models.Album, album_id)
-    if not album:
-        raise HTTPException(404, "Album not found")
-    return templates.TemplateResponse("admin/edit_album.html", {"request": request, "album": album})
 
-
-@router.post("/albums/{album_id}/update")
-def update_album(
-    request: Request,
-    album_id: int,
-    title: str = Form(...),
-    photographer: str | None = Form(None),
-    photographer_url: str | None = Form(None),
-    event_date: str | None = Form(None),
-    db: Session = Depends(get_db),
-):
-    require_admin(request)
     album = db.get(models.Album, album_id)
     if not album:
         raise HTTPException(404, "Album not found")
 
-    album.title = title.strip()
-    album.photographer = photographer or None
-    album.photographer_url = photographer_url or None
-    album.event_date = _parse_dt(event_date)
+    provider = (provider or "").strip().lower()
+    allowed = {"youtube", "vimeo", "cloudflare"}
+    if provider not in allowed:
+        raise HTTPException(400, f"Invalid provider. Must be one of: {', '.join(sorted(allowed))}")
 
-    db.commit()
-    return RedirectResponse(url=f"/admin/albums/{album.id}", status_code=303)
+    video_id = _extract_video_id(provider, video_id).strip()
+    if not video_id:
+        raise HTTPException(400, "Invalid video id")
 
-
-@router.get("/albums", response_class=HTMLResponse)
-@router.get("/albums/", response_class=HTMLResponse, include_in_schema=False)
-def list_albums(request: Request, db: Session = Depends(get_db)):
-    require_admin(request)
-    albums = db.query(models.Album).order_by(models.Album.created_at.desc()).all()
-    return templates.TemplateResponse(
-        "admin_album_list.html",
-        {"request": request, "albums": albums, "site_title": settings.SITE_TITLE},
+    exists = (
+        db.query(models.Video)
+          .filter(models.Video.album_id == album_id,
+                  models.Video.provider == provider,
+                  models.Video.video_id == video_id)
+          .first()
     )
+    if exists:
+        return RedirectResponse(url=f"/admin/albums/{album_id}", status_code=303)
 
+    v = models.Video(
+        album_id=album_id,
+        provider=provider,
+        video_id=video_id,
+        title=(title or "").strip() or None,
+    )
+    db.add(v)
+    db.commit()
+
+    return RedirectResponse(url=f"/admin/albums/{album_id}", status_code=303)
+
+@router.post("/videos/{video_id}/delete")
+def delete_video(request: Request, video_id: int, db: Session = Depends(get_db)):
+    require_admin(request)
+    v = db.get(models.Video, video_id)
+    if not v:
+        raise HTTPException(404)
+    album_id = v.album_id
+    db.delete(v)
+    db.commit()
+    return RedirectResponse(url=f"/admin/albums/{album_id}", status_code=303)
+
+# ---- HEAD helpers (لمنع أخطاء HEAD) ----
 @router.head("/albums", include_in_schema=False)
 @router.head("/albums/", include_in_schema=False)
 def albums_head():
     return Response(status_code=200, headers={"Cache-Control": "no-store"})
 
-
 @router.head("/theme", include_in_schema=False)
 @router.head("/theme/", include_in_schema=False)
 def theme_head():
-    # 200 بدون جسم، يمنع حلقات/أخطاء HEAD
     return Response(status_code=200, headers={"Cache-Control": "no-store"})
 
 @router.head("/", include_in_schema=False)
@@ -688,33 +655,3 @@ def admin_root_head():
 @router.head("/albums/{album_id}", include_in_schema=False)
 def view_album_head(album_id: int):
     return Response(status_code=200, headers={"Cache-Control": "no-store"})
-
-@router.post("/albums/{album_id}/videos/add")
-def add_video(request: Request, album_id: int,
-              provider: str = Form(...),
-              video_id: str = Form(...),
-              title: str | None = Form(None),
-              db: Session = Depends(get_db)):
-    require_admin(request)
-    album = db.get(models.Album, album_id)
-    if not album:
-        raise HTTPException(404)
-
-    v = models.Video(album_id=album_id,
-                     provider=provider.strip().lower(),
-                     provider_video_id=video_id.strip(),
-                     title=(title or "").strip() or None)
-    db.add(v)
-    db.commit()
-    return RedirectResponse(url=f"/admin/albums/{album_id}", status_code=303)
-
-
-@router.post("/videos/{video_id}/delete")
-def delete_video(request: Request, video_id: int, db: Session = Depends(get_db)):
-    require_admin(request)
-    v = db.get(models.Video, video_id)
-    if not v:
-        raise HTTPException(404)
-    album_id = v.album_id
-    db.delete(v); db.commit()
-    return RedirectResponse(url=f"/admin/albums/{album_id}", status_code=303)

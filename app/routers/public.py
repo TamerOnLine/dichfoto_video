@@ -7,16 +7,17 @@ import unicodedata
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
-from fastapi.templating import Jinja2Templates
+
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..config import settings
 from ..database import SessionLocal
-from ..services import gdrive, zips
+from ..services import gdrive
 from ..utils import is_expired, verify_password
+from ..templating import templates
 
-templates = Jinja2Templates(directory="templates")
+
 router = APIRouter(prefix="/s", tags=["public"])
 
 def ascii_fallback(name: str) -> str:
@@ -62,19 +63,27 @@ def open_share(request: Request, slug: str, db: Session = Depends(get_db)):
     sl = load_share(db, slug)
     album = sl.album
 
-    # محمي؟
+    # 🔒 هل الألبوم محمي بكلمة مرور؟
     if sl.password_hash and not request.session.get(f"unlocked:{slug}"):
-        return templates.TemplateResponse("public_album.html", {
-            "request": request, "album": album, "share": sl,
-           "locked": True, "site_title": settings.SITE_TITLE,
-            "hero": None, "gallery_assets": [],
-        })
+        return templates.TemplateResponse(
+            "public_album.html",
+            {
+                "request": request,
+                "album": album,
+                "share": sl,
+                "locked": True,
+                "site_title": settings.SITE_TITLE,
+                "hero": None,
+                "gallery_assets": [],
+                "gallery_videos": [],
+            },
+        )
 
+    # ✅ الصور غير المخفية
     assets_orm = [a for a in album.assets if not a.is_hidden]
-    # ترتيب بالـ sort_order ثم id
     assets_orm.sort(key=lambda a: ((a.sort_order or 0), a.id))
 
-    # اختَر الغلاف (إن وُجد) وإلا أول صورة
+    # ✅ اختيار صورة الغلاف
     hero_orm = None
     if album.cover_asset_id:
         hero_orm = next((x for x in assets_orm if x.id == album.cover_asset_id), None)
@@ -82,14 +91,35 @@ def open_share(request: Request, slug: str, db: Session = Depends(get_db)):
         hero_orm = assets_orm[0]
 
     hero = _asset_to_dict(hero_orm, slug) if hero_orm else None
-    others = [_asset_to_dict(a, slug) for a in assets_orm if not hero_orm or a.id != hero_orm.id]
+    others = [
+        _asset_to_dict(a, slug)
+        for a in assets_orm
+        if not hero_orm or a.id != hero_orm.id
+    ]
 
-    return templates.TemplateResponse("public_album.html", {
-        "request": request, "album": album, "share": sl, "locked": False,
-        "site_title": settings.SITE_TITLE,
-        "hero": hero,
-        "gallery_assets": others
-    })
+    # ✅ الفيديوهات المرتبطة بالألبوم
+    videos = [
+        {"id": v.id, "provider": v.provider, "video_id": v.video_id, "title": v.title}
+        for v in getattr(album, "videos", [])
+        if not getattr(v, "is_hidden", False)
+    ]
+    videos.sort(key=lambda v: v["id"], reverse=True)
+
+    # ✅ إرجاع القالب
+    return templates.TemplateResponse(
+        "public_album.html",
+        {
+            "request": request,
+            "album": album,
+            "share": sl,
+            "locked": False,
+            "site_title": settings.SITE_TITLE,
+            "hero": hero,
+            "gallery_assets": others,
+            "gallery_videos": videos,
+        },
+    )
+
 
 @router.post("/{slug}/unlock")
 def unlock(request: Request, slug: str, password: str = Form(...), db: Session = Depends(get_db)):

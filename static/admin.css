@@ -15,13 +15,13 @@ h2 {
    ========================================================================== */
 :root {
   /* ألوان */
-  --color-bg: #ffffff;
-  --color-fg: #0f172a;
+  --color-bg: #0a0707;
+  --color-fg: #9eaece;
   --color-muted: #64748b;
   --color-brand: #2563eb;
   --color-brand-dark: #1d4ed8;
   --color-border: #e2e8f0;
-  --color-surface: #f8fafc;
+  --color-surface: #111213;
 
   /* خطوط */
   --font-main: 'Inter', system-ui, sans-serif;
@@ -235,18 +235,66 @@ h3 {
   gap: var(--gap);
 }
 
+/* static/admin.css */
+
+/* كروت الصور والفيديو */
 .asset-card {
-  padding: 0;
+  background: #2e2b2b;          /* خلفية بيضاء */
+  color: #eeebeb;               /* نص غامق */
+  border: 1px solid #e5e7eb; /* إطار فاتح */
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 2px 4px rgba(0,0,0,.05);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.asset-card .thumb-wrap {
+  background: #f9fafb; /* خلفية رمادية فاتحة للصور/الفيديو */
+  border-radius: 6px;
   overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .asset-card img {
   display: block;
   width: 100%;
-  height: var(--admin-thumb-h);  /* ← الآن 120px بدل 160px */
-  object-fit: cover;
-  border-radius: 0;
+  height: auto;
+  border-radius: 6px;
 }
+
+.asset-card .caption {
+  font-size: 13px;
+  color: #374151;
+  margin-top: 4px;
+}
+
+.asset-card .meta {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.asset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.asset-actions button {
+  background: #f3f4f6;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.asset-actions button:hover {
+  background: #e5e7eb;
+}
+
 
 .caption {
   border-radius: 0;
