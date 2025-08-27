@@ -655,3 +655,43 @@ def admin_root_head():
 @router.head("/albums/{album_id}", include_in_schema=False)
 def view_album_head(album_id: int):
     return Response(status_code=200, headers={"Cache-Control": "no-store"})
+
+# --- Edit album ---
+@router.get("/albums/{album_id}/edit", response_class=HTMLResponse)
+def edit_album_form(request: Request, album_id: int, db: Session = Depends(get_db)):
+    require_admin(request)
+    album = db.get(models.Album, album_id)
+    if not album:
+        raise HTTPException(404)
+    return templates.TemplateResponse(
+        "admin/edit_album.html",
+        {
+            "request": request,
+            "site_title": settings.SITE_TITLE,
+            "album": album,
+        },
+    )
+
+
+@router.post("/albums/{album_id}/edit")
+def edit_album_save(
+    request: Request,
+    album_id: int,
+    title: str = Form(...),
+    photographer: str | None = Form(None),
+    photographer_url: str | None = Form(None),
+    event_date: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    require_admin(request)
+    album = db.get(models.Album, album_id)
+    if not album:
+        raise HTTPException(404)
+
+    album.title = title.strip()
+    album.photographer = (photographer or "").strip() or None
+    album.photographer_url = (photographer_url or "").strip() or None
+    album.event_date = _parse_dt(event_date)
+
+    db.commit()
+    return RedirectResponse(url=f"/admin/albums/{album_id}", status_code=303)
