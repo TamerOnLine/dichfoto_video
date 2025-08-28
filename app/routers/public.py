@@ -63,7 +63,7 @@ def open_share(request: Request, slug: str, db: Session = Depends(get_db)):
     sl = load_share(db, slug)
     album = sl.album
 
-    # 🔒 هل الألبوم محمي بكلمة مرور؟
+    # 🔒 حماية بكلمة مرور
     if sl.password_hash and not request.session.get(f"unlocked:{slug}"):
         return templates.TemplateResponse(
             "public_album.html",
@@ -83,7 +83,7 @@ def open_share(request: Request, slug: str, db: Session = Depends(get_db)):
     assets_orm = [a for a in album.assets if not a.is_hidden]
     assets_orm.sort(key=lambda a: ((a.sort_order or 0), a.id))
 
-    # ✅ اختيار صورة الغلاف
+    # ✅ الغلاف
     hero_orm = None
     if album.cover_asset_id:
         hero_orm = next((x for x in assets_orm if x.id == album.cover_asset_id), None)
@@ -91,21 +91,22 @@ def open_share(request: Request, slug: str, db: Session = Depends(get_db)):
         hero_orm = assets_orm[0]
 
     hero = _asset_to_dict(hero_orm, slug) if hero_orm else None
-    others = [
-        _asset_to_dict(a, slug)
-        for a in assets_orm
-        if not hero_orm or a.id != hero_orm.id
-    ]
+    others = [_asset_to_dict(a, slug) for a in assets_orm if not hero_orm or a.id != hero_orm.id]
 
-    # ✅ الفيديوهات المرتبطة بالألبوم
+    # ✅ الفيديوهات (مهم: تمرير vimeo_hash)
     videos = [
-        {"id": v.id, "provider": v.provider, "video_id": v.video_id, "title": v.title}
+        {
+            "id": v.id,
+            "provider": v.provider,
+            "video_id": v.video_id,
+            "vimeo_hash": getattr(v, "vimeo_hash", None),   # ← الجديد
+            "title": v.title,
+        }
         for v in getattr(album, "videos", [])
         if not getattr(v, "is_hidden", False)
     ]
     videos.sort(key=lambda v: v["id"], reverse=True)
 
-    # ✅ إرجاع القالب
     return templates.TemplateResponse(
         "public_album.html",
         {
