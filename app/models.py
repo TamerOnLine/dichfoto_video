@@ -145,15 +145,13 @@ class Asset(Base):
 
 
 class Video(Base):
-    """Represents a video linked to an album."""
-
     __tablename__ = "videos"
-
     id = Column(Integer, primary_key=True, index=True)
     album_id = Column(Integer, ForeignKey("albums.id", ondelete="CASCADE"), index=True)
 
-    provider = Column(String(50), nullable=False)      # youtube, vimeo, cloudflare
-    video_id = Column(String(255), nullable=False)     # ID from provider
+    provider = Column(String(50), nullable=False)   # youtube, vimeo, cloudflare
+    video_id = Column(String(255), nullable=False)  # ID from provider
+    vimeo_hash = Column(String(64), nullable=True)  # <-- أضف هذا
     title = Column(String, nullable=True)
     description = Column(Text, nullable=True)
     is_hidden = Column(Boolean, default=False)

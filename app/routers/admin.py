@@ -27,32 +27,113 @@ from app.utils import _parse_dt
 import re
 from urllib.parse import urlparse, parse_qs
 
-def _extract_video_id(provider: str, raw: str) -> str:
+
+
+router = APIRouter(
+    prefix="/admin",
+    tags=["admin"]
+)
+
+
+def _extract_vimeo_id_and_hash(raw: str) -> tuple[str, str | None]:
     raw = (raw or "").strip()
-    p = (provider or "").lower()
+    # أنماط: 
+    # - https://vimeo.com/123456789
+    # - https://vimeo.com/userXXXX/review/123456789/9cc5da9bea
+    # - https://player.vimeo.com/video/123456789?h=9cc5da9bea
+    vid = None
+    hsh = None
 
-    if p == "youtube":
-        # https://youtu.be/ID  |  https://www.youtube.com/watch?v=ID
-        if "youtu.be/" in raw:
-            return raw.rsplit("/", 1)[-1].split("?")[0]
-        if "watch" in raw:
-            return parse_qs(urlparse(raw).query).get("v", [""])[0]
-        return raw  # قد يكون ID مباشرة
+    # 1) player.vimeo.com مع query h=
+    u = urlparse(raw)
+    if "player.vimeo.com" in u.netloc:
+        m = re.search(r"/video/(\d+)", u.path)
+        if m:
+            vid = m.group(1)
+        qh = parse_qs(u.query).get("h", [None])[0]
+        hsh = qh or hsh
 
-    if p == "vimeo":
-        # https://vimeo.com/123456789
+    # 2) review link
+    if vid is None:
+        m = re.search(r"vimeo\.com/.*/review/(\d+)/([0-9a-zA-Z]+)", raw)
+        if m:
+            vid, hsh = m.group(1), m.group(2)
+
+    # 3) رابط عادي vimeo.com/ID
+    if vid is None:
         m = re.search(r"vimeo\.com/(\d+)", raw)
-        return m.group(1) if m else raw
+        if m:
+            vid = m.group(1)
 
-    if p == "cloudflare":
-        # https://iframe.videodelivery.net/PLAYBACK_ID
-        m = re.search(r"videodelivery\.net/([A-Za-z0-9_-]+)", raw)
-        return m.group(1) if m else raw
+    # 4) لو أُدخل رقم مباشرة
+    if vid is None and raw.isdigit():
+        vid = raw
 
-    return raw
+    return vid or "", hsh
+
+# --- YouTube / Cloudflare + wrapper ---
+
+_YT_ID_RE = re.compile(r'^[A-Za-z0-9_-]{6,}$')   # ID اليوتيوب غالبًا 11، نسمح ≥6
+_VIMEO_ID_RE = re.compile(r'(\d{6,12})')
+_UUID_RE = re.compile(r'[a-f0-9]{32}|[a-f0-9-]{36}', re.I)
+
+def _extract_youtube_id(raw: str) -> str:
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    try:
+        u = urlparse(raw)
+        # youtu.be/<id>
+        if u.netloc.endswith("youtu.be"):
+            seg = u.path.strip("/").split("/")[0]
+            return seg or ""
+        # youtube.com/watch?v=<id> | /embed/<id> | /shorts/<id>
+        if "youtube.com" in u.netloc:
+            q = parse_qs(u.query)
+            if "v" in q and q["v"]:
+                return q["v"][0]
+            parts = u.path.strip("/").split("/")
+            if len(parts) >= 2 and parts[0] in ("embed", "shorts"):
+                return parts[1]
+    except Exception:
+        pass
+    # لو أُدخل الـID مباشرة
+    return raw if _YT_ID_RE.match(raw) else ""
+
+def _extract_cloudflare_id(raw: str) -> str:
+    """
+    أمثلة مدعومة:
+    - https://iframe.videodelivery.net/<uuid>
+    - https://watch.cloudflarestream.com/<uuid>
+    - إدخال UUID مباشرة
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    try:
+        u = urlparse(raw)
+        first_seg = u.path.strip("/").split("/")[0] if u.path else ""
+        if first_seg and _UUID_RE.fullmatch(first_seg):
+            return first_seg
+    except Exception:
+        pass
+    m = _UUID_RE.search(raw)
+    return m.group(0) if m else ""
+
+def _extract_video_id(provider: str, raw: str) -> str:
+    """واجهة موحّدة تُستخدم داخل add_video."""
+    p = (provider or "").lower().strip()
+    if p in ("youtube", "yt"):
+        return _extract_youtube_id(raw)
+    if p in ("vimeo",):
+        vid, _h = _extract_vimeo_id_and_hash(raw)  # نستخدم دالتك الحالية
+        return vid or ""
+    if p in ("cloudflare", "cf", "stream", "cloudflare_stream"):
+        return _extract_cloudflare_id(raw)
+    # الافتراضي: رجّع النص كما هو
+    return (raw or "").strip()
 
 
-router = APIRouter(prefix="/admin", tags=["admin"])
 
 # ===========================
 # Theme config (simple JSON)

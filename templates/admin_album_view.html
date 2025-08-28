@@ -99,12 +99,18 @@
         {% for v in videos %}
           <figure class="card asset-card">
             <div class="thumb-wrap" style="aspect-ratio:16/9">
-              <iframe src="{{ build_embed_url(v.provider, v.provider_video_id) }}"
-                      allowfullscreen loading="lazy"
-                      style="width:100%;height:100%;border:0"></iframe>
+              <iframe
+                src="{{ build_embed_url(v.provider, v.video_id, v.vimeo_hash if v.provider == 'vimeo' else None) }}"
+                allowfullscreen
+                loading="lazy"
+                style="width:100%;height:100%;border:0"
+              ></iframe>
             </div>
+
+
+
             <figcaption class="caption">
-              {{ v.title or (v.provider ~ ':' ~ v.provider_video_id) }}
+              {{ v.title or (v.provider ~ ':' ~ v.video_id) }}
             </figcaption>
             <div class="asset-actions">
               <form action="/admin/videos/{{ v.id }}/delete" method="post"
