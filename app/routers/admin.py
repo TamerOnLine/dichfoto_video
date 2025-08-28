@@ -666,13 +666,17 @@ def clear_cover(request: Request, album_id: int, db: Session = Depends(get_db)):
 
 # ---- Videos ----
 @router.post("/albums/{album_id}/videos/add")
-def add_video(request: Request, album_id: int,
-              provider: str = Form(...),
-              video_id: str = Form(...),      # يقبل ID أو رابط كامل
-              title: str | None = Form(None),
-              db: Session = Depends(get_db)):
+def add_video(
+    request: Request,
+    album_id: int,
+    provider: str = Form(...),
+    video_id: str = Form(...),      # يقبل ID أو رابط كامل
+    title: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
     require_admin(request)
 
+    # تحقّق من الألبوم
     album = db.get(models.Album, album_id)
     if not album:
         raise HTTPException(404, "Album not found")
@@ -682,30 +686,47 @@ def add_video(request: Request, album_id: int,
     if provider not in allowed:
         raise HTTPException(400, f"Invalid provider. Must be one of: {', '.join(sorted(allowed))}")
 
-    video_id = _extract_video_id(provider, video_id).strip()
+    # ---- استخراج الـID (+ hash لفيميو) ----
+    vimeo_hash = None
+    raw = (video_id or "").strip()
+
+    if provider == "vimeo":
+        vid, h = _extract_vimeo_id_and_hash(raw)
+        video_id = (vid or "").strip()
+        vimeo_hash = (h or "").strip() or None
+    else:
+        video_id = _extract_video_id(provider, raw).strip()
+
     if not video_id:
         raise HTTPException(400, "Invalid video id")
 
+    # منع التكرار (مهم مع Vimeo لأن الـhash جزء من الهوية)
     exists = (
         db.query(models.Video)
-          .filter(models.Video.album_id == album_id,
-                  models.Video.provider == provider,
-                  models.Video.video_id == video_id)
+          .filter(
+              models.Video.album_id == album_id,
+              models.Video.provider == provider,
+              models.Video.video_id == video_id,
+              models.Video.vimeo_hash.is_(vimeo_hash),  # IS NULL إذا None
+          )
           .first()
     )
     if exists:
         return RedirectResponse(url=f"/admin/albums/{album_id}", status_code=303)
 
+    # إنشاء السجل
     v = models.Video(
         album_id=album_id,
         provider=provider,
         video_id=video_id,
+        vimeo_hash=vimeo_hash,
         title=(title or "").strip() or None,
     )
     db.add(v)
     db.commit()
 
     return RedirectResponse(url=f"/admin/albums/{album_id}", status_code=303)
+
 
 @router.post("/videos/{video_id}/delete")
 def delete_video(request: Request, video_id: int, db: Session = Depends(get_db)):
